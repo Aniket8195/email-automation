@@ -22,11 +22,11 @@ router.get('/auth/google', (req: Request, res: Response) => {
     'https://www.googleapis.com/auth/gmail.insert',
     'https://www.googleapis.com/auth/gmail.settings.basic',
     'https://www.googleapis.com/auth/gmail.settings.sharing',
-    'https://www.googleapis.com/auth/gmail.metadata',
+   // 'https://www.googleapis.com/auth/gmail.metadata',
     'https://mail.google.com/',
     'https://www.googleapis.com/auth/gmail.addons.current.message.readonly',
     'https://www.googleapis.com/auth/gmail.addons.current.message.action',
-    'https://www.googleapis.com/auth/gmail.addons.current.message.metadata'
+   // 'https://www.googleapis.com/auth/gmail.addons.current.message.metadata'
        
     ],
     redirect_uri: 'http://localhost:3000/auth/google/callback',

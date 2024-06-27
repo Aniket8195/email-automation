@@ -65,7 +65,7 @@ const getGoogleEmailDetails = async (user: User, emailId: string) => {
     const res = await gmail.users.messages.get({
       userId: 'me',
       id: emailId,
-      format: 'minimal',
+      format: 'full',
     });
     console.log('API Response:', res.data);
 
