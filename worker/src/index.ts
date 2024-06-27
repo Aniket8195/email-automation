@@ -1,58 +1,58 @@
 import express from 'express';
 import { Worker, Queue } from 'bullmq';
 import { google } from 'googleapis';
-import { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, OUTLOOK_CLIENT_ID, OUTLOOK_CLIENT_SECRET, OUTLOOK_TENANT_ID, BING_API_KEY } from './config';
-import { Client } from '@microsoft/microsoft-graph-client';
-import { TokenCredentialAuthenticationProvider } from '@microsoft/microsoft-graph-client/authProviders/azureTokenCredentials';
-import { ClientSecretCredential } from '@azure/identity';
+import { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, BING_API_KEY } from './config';
 import axios from 'axios';
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+const fs = require("fs");
+
+
+const genAI = new GoogleGenerativeAI(BING_API_KEY);
+
+interface User {
+  email: string;
+  accessToken: string;
+  refreshToken: string;
+}
+
+interface Email {
+  id: string;
+}
+
+interface JobData {
+  user: User;
+  email: Email;
+}
 
 const connection = {
   host: 'localhost',
   port: 6379,
 };
-const myQueue = new Queue('my-queue', { connection });
 
-const worker = new Worker('my-queue', async job => {
+const myQueue = new Queue<JobData>('my-queue', { connection });
+
+const worker = new Worker<JobData>('my-queue', async job => {
   const { user, email } = job.data;
 
   console.log(`Processing email ${email.id} for user ${user.email}`);
-  let emailDetails: any;
+  let emailDetails;
   try {
-   
-      emailDetails = await getGoogleEmailDetails(user, email.id);
-    
+    emailDetails = await getGoogleEmailDetails(user, email.id);
 
-    const { subject, body, from } = emailDetails;
+    const { subject, body, sender } = emailDetails;
 
-    
-    console.log(`Generating reply for email body: ${body}`);
-    const response = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${BING_API_KEY}`, {
-      contents: [
-        {
-          parts: [
-            { text: body }
-          ]
-        }
-      ]
-    });
+    console.log(`Extracted body: ${body}`);
 
-    console.log(`API response: ${JSON.stringify(response.data)}`);
-    const replyText = response.data.contents[0].parts[0].text;
+    const replyText = await generateReply(body);
     console.log(`Generated reply: ${replyText}`);
 
-   
-    if (user.provider === 'google') {
-      await sendGoogleReply(user, from, subject, replyText);
-    } else if (user.provider === 'outlook') {
-      await sendOutlookReply(user, from, subject, replyText);
-    }
+    await sendGoogleReply(user, sender || ' ', subject || '', replyText);
   } catch (error: any) {
-    console.error(`Error processing email ${email.id} for user ${user.email}: ${error.message}`);
+    console.error(`Error ${email.id} for user ${user.email}: ${error.message}`);
   }
 }, { connection });
 
-const getGoogleEmailDetails = async (user: any, emailId: string) => {
+const getGoogleEmailDetails = async (user: User, emailId: string) => {
   const oauth2Client = new google.auth.OAuth2(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET);
   oauth2Client.setCredentials({
     access_token: user.accessToken,
@@ -60,33 +60,40 @@ const getGoogleEmailDetails = async (user: any, emailId: string) => {
   });
 
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-  const res = await gmail.users.messages.get({
-    userId: 'me',
-    id: emailId,
-    format: 'minimal', 
-  });
+  try {
+    console.log(`Fetching email details for email ID: ${emailId}`);
+    const res = await gmail.users.messages.get({
+      userId: 'me',
+      id: emailId,
+      format: 'minimal',
+    });
+    console.log('API Response:', res.data);
 
-  console.log(`Google API response for user ${user.email}: ${JSON.stringify(res.data)}`);
-
-  const headers = res.data.payload?.headers || [];
-  const subject = headers.find(header => header.name === 'Subject')?.value;
-  const from = headers.find(header => header.name === 'From')?.value;
-  const body = getBody(res.data.payload);
-
-  return { subject, body, from };
+    if (!res.data || !res.data.payload) {
+      throw new Error('Invalid email payload');
+    }
+    const headers = res.data.payload.headers || [];
+    const subject = headers.find(header => header.name === 'Subject')?.value || 'No Subject';
+    const sender = headers.find(header => header.name === 'From')?.value || 'No Sender';
+    const body = getBody(res.data.payload);
+    return { subject, body, sender };
+  } catch (error: any) {
+    console.error(`Error getting email details for email ${emailId} for user ${user.email}: ${error.message}`);
+    throw error;
+  }
 };
 
 const getBody = (payload: any): string => {
   let body = '';
 
-  const traverseParts = (parts: any[]) => {
+  const traverseParts = (parts: any) => {
     for (const part of parts) {
       if (part.parts) {
         traverseParts(part.parts);
       } else if (part.mimeType === 'text/plain' && part.body.data) {
         body += Buffer.from(part.body.data, 'base64').toString('utf8');
       } else if (part.mimeType === 'text/html' && part.body.data) {
-        body += Buffer.from(part.body.data, 'base64').toString('utf8'); 
+        body += Buffer.from(part.body.data, 'base64').toString('utf8');
       }
     }
   };
@@ -97,35 +104,35 @@ const getBody = (payload: any): string => {
     body = Buffer.from(payload.body.data, 'base64').toString('utf8');
   }
 
-  console.log(`Extracted body: ${body}`);
   return body;
 };
 
-const getOutlookEmailDetails = async (user: any, emailId: string) => {
-  const credential = new ClientSecretCredential(
-    OUTLOOK_TENANT_ID || '',
-    OUTLOOK_CLIENT_ID || '',
-    OUTLOOK_CLIENT_SECRET || ''
-  );
+const generateReply = async (body: string): Promise<string> => {
+  const prompt = `Analyze the email content below and determine whether the sender is interested, not interested, or requesting more information about our services. Generate an appropriate response based on this categorization.
 
-  const authProvider = new TokenCredentialAuthenticationProvider(credential, {
-    scopes: ['https://graph.microsoft.com/.default'],
-  });
+Email content: ${body}`;
 
-  const client = Client.initWithMiddleware({
-    authProvider,
-  });
+  try {
+    console.log(`Generating reply for body: ${body}`);
+  
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const result = await model.generateContent([
+      prompt,
+      
+    ]);
 
-  const res = await client.api(`/me/messages/${emailId}`).get();
-
-  const subject = res.subject;
-  const body = res.body.content;
-  const from = res.from.emailAddress.address;
-
-  return { subject, body, from };
+    if (result && result.response && result.response.text) {
+      return result.response.text();
+    } else {
+      throw new Error('Invalid response from generative AI model');
+    }
+  } catch (error: any) {
+    console.error(`Error generating reply: ${error.message}`);
+    throw error;
+  }
 };
 
-const sendGoogleReply = async (user: any, from: string, subject: string, replyText: string) => {
+const sendGoogleReply = async (user: User, from: string, subject: string, replyText: string) => {
   const oauth2Client = new google.auth.OAuth2(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET);
   oauth2Client.setCredentials({
     access_token: user.accessToken,
@@ -133,6 +140,9 @@ const sendGoogleReply = async (user: any, from: string, subject: string, replyTe
   });
 
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+
+  console.log(`Sending reply from: ${from}`);
+
   const raw = [
     `From: ${user.email}`,
     `To: ${from}`,
@@ -147,50 +157,20 @@ const sendGoogleReply = async (user: any, from: string, subject: string, replyTe
     .replace(/\//g, '_')
     .replace(/=+$/, '');
 
-  await gmail.users.messages.send({
-    userId: 'me',
-    requestBody: {
-      raw: encodedMessage,
-    },
-  });
-
-  console.log(`Reply sent to ${from} for Google user ${user.email}`);
-};
-
-const sendOutlookReply = async (user: any, from: string, subject: string, replyText: string) => {
-  const credential = new ClientSecretCredential(
-    OUTLOOK_TENANT_ID || '',
-    OUTLOOK_CLIENT_ID || '',
-    OUTLOOK_CLIENT_SECRET || ''
-  );
-
-  const authProvider = new TokenCredentialAuthenticationProvider(credential, {
-    scopes: ['https://graph.microsoft.com/.default'],
-  });
-
-  const client = Client.initWithMiddleware({
-    authProvider,
-  });
-
-  await client.api('/me/sendMail').post({
-    message: {
-      subject: `Re: ${subject}`,
-      body: {
-        contentType: 'Text',
-        content: replyText,
+  try {
+    await gmail.users.messages.send({
+      userId: 'me',
+      requestBody: {
+        raw: encodedMessage,
       },
-      toRecipients: [
-        {
-          emailAddress: {
-            address: from,
-          },
-        },
-      ],
-    },
-    saveToSentItems: 'true',
-  });
+    });
 
-  console.log(`Reply sent to ${from} for Outlook user ${user.email}`);
+    console.log(`Reply sent to ${from} for Google user ${user.email}`);
+  } catch (error: any) {
+    console.error(`Error sending reply to ${from} for Google user ${user.email}: ${error.message}`);
+    throw error;
+  }
 };
+
 
 console.log('Worker is running...');
