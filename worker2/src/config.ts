@@ -10,5 +10,4 @@ export const {
   OUTLOOK_CLIENT_SECRET,
   OUTLOOK_TENANT_ID,
   BING_API_KEY,
-  JWT_SECRET,
 } = process.env;

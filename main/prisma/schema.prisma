@@ -8,9 +8,65 @@ generator client {
 }
 
 model User {
-  id          Int     @id @default(autoincrement())
-  email       String  @unique
-  provider    String
-  accessToken String
-  refreshToken String
+  id                Int        @id @default(autoincrement())
+  email             String     @unique
+  provider          String
+  accessToken       String
+  refreshToken      String
+  defaultTemplate   Template?  @relation("DefaultTemplate", fields: [defaultTemplateId], references: [id])
+  defaultTemplateId Int?       @unique
+  templates         Template[] @relation("UserTemplates")
+  schedules         Schedule[]
+  sentEmails        SentEmail[]
+  followUps         FollowUp[]
+}
+
+model Template {
+  id          Int          @id @default(autoincrement())
+  name        String
+  label       String       @unique
+  subject     String
+  body        String
+  userId      Int
+  user        User         @relation("UserTemplates", fields: [userId], references: [id], onDelete: Cascade)
+  defaultedBy User?        @relation("DefaultTemplate")
+  schedules   Schedule[]
+  sentEmails  SentEmail[]
+}
+
+model Schedule {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  user        User     @relation(fields: [userId], references: [id],onDelete: Cascade)
+  templateId  Int
+  template    Template @relation(fields: [templateId], references: [id])
+  recipient   String
+  subject     String
+  body        String
+  sendAt      DateTime
+  status      Int     @default(0) // 0: Pending, 1: Sent, 2: Failed
+}
+
+model SentEmail {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  user        User     @relation(fields: [userId], references: [id])
+  templateId  Int
+  template    Template @relation(fields: [templateId], references: [id])
+  recipient   String
+  subject     String
+  body        String
+  sentAt      DateTime @default(now())
+  openRate    Float     @default(0)
+  replyRate   Float     @default(0)
+  clickRate   Float     @default(0)
+}
+
+model FollowUp {
+  id            Int      @id @default(autoincrement())
+  userId        Int
+  user          User     @relation(fields: [userId], references: [id])
+  originalEmailId String   // Optional: to track the original email ID for reference
+  followUpEmailId String   // ID of the follow-up email
+  sendAt        DateTime  // Scheduled time for sending the follow-up
 }

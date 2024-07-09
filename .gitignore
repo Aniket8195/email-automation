@@ -3,3 +3,6 @@
 /worker/node_modules
 /worker/dist
 /main/dist
+/worker2/node_modules
+/worker2/dist
+/frontend/node_modules

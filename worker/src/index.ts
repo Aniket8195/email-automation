@@ -40,7 +40,7 @@ const worker = new Worker<JobData>('my-queue', async job => {
 
     console.log(`Extracted body: ${body}`);
 
-    const { text: replyText, label } = await generateReply(body);
+    const { text: replyText, label } = await generateReply(body, user);
     console.log(`Generated reply: ${replyText}`);
 
     await sendGoogleReply(user, sender || ' ', subject || '', replyText);
@@ -106,9 +106,10 @@ const getBody = (payload: any): string => {
   return body;
 };
 
-const generateReply = async (body: string): Promise<{ text: string, label: string }> => {
+const generateReply = async (body: string,user:User): Promise<{ text: string, label: string }> => {
   const prompt = `Analyze the email content below and determine whether the sender is interested, not interested, or requesting more information about our services. Generate an appropriate response based on this categorization.
-
+The email should be on behalf of the user and should be polite and professional.
+User email: ${user.email}
 Email content: ${body}`;
 
   try {

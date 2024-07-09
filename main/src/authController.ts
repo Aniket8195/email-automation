@@ -1,8 +1,9 @@
 import express, { Request, Response } from 'express';
 import { OAuth2Client } from 'google-auth-library';
 import { PublicClientApplication } from '@azure/msal-node';
+import jwt from 'jsonwebtoken';
 import { PrismaClient } from '@prisma/client';
-import { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, OUTLOOK_CLIENT_ID, OUTLOOK_CLIENT_SECRET } from './config';
+import { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, OUTLOOK_CLIENT_ID, OUTLOOK_CLIENT_SECRET,JWT_SECRET } from './config';
 import { google } from 'googleapis';
 
 const router = express.Router();
@@ -30,6 +31,7 @@ router.get('/auth/google', (req: Request, res: Response) => {
        
     ],
     redirect_uri: 'http://localhost:3000/auth/google/callback',
+    // redirect_uri: 'http://localhost:5273/dashboard',
   });
   res.redirect(authUrl);
 });
@@ -40,6 +42,7 @@ router.get('/auth/google/callback', async (req: Request, res: Response) => {
     return res.status(400).send('Missing code parameter');
   }
   const redirectUri = 'http://localhost:3000/auth/google/callback';
+  // const redirectUri= 'http://localhost:5273/dashboard';
   try {
     const { tokens } = await googleClient.getToken({
       code: code,
@@ -52,17 +55,37 @@ router.get('/auth/google/callback', async (req: Request, res: Response) => {
 
     const oauth2 = google.oauth2({ auth: googleClient, version: 'v2' });
     const userInfo = await oauth2.userinfo.get();
-
-    await prisma.user.create({
-      data: {
-        email: userInfo.data.email ?? '',
-        provider: 'google',
-        accessToken: tokens.access_token as string,
-        refreshToken: tokens.refresh_token ?? '',
-      },
+    
+    let user = await prisma.user.findUnique({
+      where: { email: userInfo.data.email ?? '' },
     });
 
-    res.send('Google OAuth successful!');
+    if (!user) {
+      user = await prisma.user.create({
+        data: {
+          email: userInfo.data.email ?? '',
+          provider: 'google',
+          accessToken: tokens.access_token as string,
+          refreshToken: tokens.refresh_token ?? '',
+        },
+      });
+      if(JWT_SECRET!=null){
+        const jwtToken = jwt.sign({ userId: user.id }, JWT_SECRET || '', {
+          expiresIn: '100h', 
+        });
+        //localStorage.setItem('token', jwtToken);
+        // res.redirect(`http://localhost:5173/dashboard/${user.id}${jwtToken}`);
+        res.redirect(`http://localhost:5173/dashboard?id=${user.id}&token=${encodeURIComponent(jwtToken)}`);
+
+
+        //res.json({ token: jwtToken });
+      }
+    }
+    
+    
+
+   //res.send('jwt error');
+    //res.send('Google OAuth successful!');
   } catch (error) {
     console.error('Error during OAuth callback', error);
     res.status(500).send('Internal Server Error');
